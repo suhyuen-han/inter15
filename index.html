@@ -1,0 +1,1709 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>키보드 사운드 x 도형 애니메이션</title>
+  <style>
+    :root { --bg:#2a2b2f; --fg:#c8d6e5; }
+    html, body {
+      margin:0;
+      height:100%;
+      background:#2a2b2f;
+      overflow:hidden;
+      color:var(--fg);
+      font-family: ui-sans-serif, system-ui, -apple-system;
+    }
+    #stage {
+      position:fixed;
+      inset:0;
+      display:block;
+    }
+    .hud {
+      position:fixed;
+      left:16px;
+      bottom:16px;
+      background:rgba(255,255,255,0.05);
+      border-radius:16px;
+      padding:12px 14px;
+      line-height:1.2;
+      user-select:none;
+      pointer-events:none;
+      box-shadow:0 10px 30px rgba(0,0,0,0.35);
+      max-width:min(90vw,520px);
+      font-size:13px;
+    }
+    .last-key {
+      font-size:28px;
+      font-weight:700;
+      margin-bottom:4px;
+      letter-spacing:.02em;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="stage"></canvas>
+
+  <div class="hud">
+    <div class="last-key" id="lastKey">READY</div>
+    <div></div>
+  </div>
+
+  <script>
+    // =====================
+    // 키 & 사운드 설정
+    // =====================
+    const KEY_CONFIG = {
+      q:{ sound:"q.mp3" },
+      a:{ sound:"a.mp3" },
+      s:{ sound:"s.mp3" },
+      u:{ sound:"u.mp3" },
+      i:{ sound:"i.mp3" },
+      o:{ sound:"o.mp3" },
+      r:{ sound:"r.mp3" },
+      e:{ sound:"e.mp3" },
+      w:{ sound:"w.mp3" },
+      t:{ sound:"t.mp3" },
+      y:{ sound:"y.mp3" },
+      p:{ sound:"p.mp3" },
+      d:{ sound:"d.mp3" },
+      x:{ sound:"x.mp3" },
+      f:{ sound:"f.mp3" },
+      g:{ sound:"g.mp3" },
+      h:{ sound:"h.mp3" },
+      j:{ sound:"j.mp3" },
+      k:{ sound:"k.mp3" },
+      l:{ sound:"l.mp3" },
+      z:{ sound:"z.mp3" },
+      c:{ sound:"c.mp3" },
+      v:{ sound:"v.mp3" },
+      b:{ sound:"b.mp3" } ,
+      n:{ sound:"n.mp3" },
+      m:{ sound:"m.mp3" } 
+    };
+    const SUPPORTED_KEYS = [
+      "q","a","s","u","i","o","r","e","w","t","y","p","d","x","f","g","h","j","k","l","z","c","v","b","n" ,"m"
+    ];
+
+    function preloadSounds(){
+      SUPPORTED_KEYS.forEach(k=>{
+        const src = KEY_CONFIG[k]?.sound;
+        if(!src) return;
+        const a = new Audio(src);
+        a.preload = "auto";
+      });
+    }
+
+    function playSoundForKey(k){
+      const src = KEY_CONFIG[k]?.sound;
+      if(!src) return;
+      const a = new Audio(src);
+      a.play().catch(()=>{});
+    }
+
+    // =====================
+    // 캔버스 셋업
+    // =====================
+    const canvas = document.getElementById("stage");
+    const ctx = canvas.getContext("2d");
+    const viewport = { w:0, h:0, dpr:1 };
+
+    function resize(){
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      viewport.w = w;
+      viewport.h = h;
+      viewport.dpr = dpr;
+
+      canvas.width  = w*dpr;
+      canvas.height = h*dpr;
+      canvas.style.width  = w+"px";
+      canvas.style.height = h+"px";
+
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    const particles = [];
+
+    // =====================
+    // Q, A : 화면 전체 플래시
+    // =====================
+    function startFlash(colorRGB){
+      const life = 0.6;
+      particles.push({
+        type:"flash",
+        life,
+        maxLife:life,
+        color: colorRGB
+      });
+    }
+
+    // =====================
+    // S : 전체 커버 스와이프
+    // =====================
+    let coverFromTop = true;
+
+    function startCoverSwipe(){
+      const life = 1.3;
+      particles.push({
+        type:"cover",
+        life,
+        maxLife: life,
+        from: coverFromTop ? "top" : "bottom",
+        color: "#c89a85"
+      });
+      coverFromTop = !coverFromTop;
+    }
+    // =====================
+// M : 중앙에서 커지는 정육각형 (I랑 스타일 같게)
+// =====================
+function startMHex(){
+  const life = 0.8;
+  const baseSize = Math.min(viewport.w, viewport.h) * 0.3;
+  const angle = Math.random() * Math.PI * 2;
+
+  particles.push({
+    type:"mHex",
+    life,
+    maxLife: life,
+    cx: viewport.w / 2,
+    cy: viewport.h / 2,
+    baseSize,
+    rot: angle
+  });
+}
+
+    // =====================
+    // U : 한 점에서 흩뿌려지는 원들
+    // =====================
+    function startUBurst(){
+      const cx = Math.random() * viewport.w * 0.8 + viewport.w * 0.1;
+      const cy = Math.random() * viewport.h * 0.8 + viewport.h * 0.1;
+
+      const life = 1.0;
+      const moveFrac = 0.25;
+      const count = 26;
+
+      const minDim = Math.min(viewport.w, viewport.h);
+      const minDist = minDim * 0.1;
+      const maxDist = minDim * 0.99;
+
+      const baseAngle = Math.random() * Math.PI * 2;
+      const spread = Math.PI * 0.7;
+      const dots = [];
+
+      for(let i=0;i<count;i++){
+        let dist;
+        const r = Math.random();
+        if (r < 0.45) {
+          dist = minDist + Math.random()**2 * (maxDist * 0.35 - minDist);
+        } else if (r < 0.8) {
+          const midMin = maxDist * 0.2;
+          const midMax = maxDist * 0.6;
+          dist = midMin + Math.random() * (midMax - midMin);
+        } else {
+          const farMin = maxDist * 0.5;
+          dist = farMin + Math.random()**0.4 * (maxDist - farMin);
+        }
+
+        const angle = baseAngle + (Math.random() - 0.2) * spread;
+
+        const tx = cx + Math.cos(angle) * dist;
+        const ty = cy + Math.sin(angle) * dist;
+
+        const rMin = 4;
+        const rMax = 30;
+        const radius = rMin + (1 - Math.random()**2) * (rMax - rMin);
+
+        dots.push({ tx, ty, r: radius });
+      }
+
+      particles.push({
+        type: "uBurst",
+        life,
+        maxLife: life,
+        cx,
+        cy,
+        baseR: 34,
+        dots,
+        moveFrac
+      });
+    }
+
+    // =====================
+    // I : 정삼각형
+    // =====================
+    function startITriangle(){
+      const life = 0.8;
+      const baseSize = Math.min(viewport.w, viewport.h) * 0.3;
+      const angle = Math.random() * Math.PI * 2;
+
+      particles.push({
+        type:"tri",
+        life,
+        maxLife: life,
+        cx: viewport.w / 2,
+        cy: viewport.h / 2,
+        baseSize,
+        rot: angle
+      });
+    }
+   
+    // =====================
+    // L : 세로 고정, 가로 랜덤 지그재그
+    // =====================
+    function startLZig(){
+      const startY = viewport.h * 0.3;
+      const endY   = startY + 500;
+
+      const randomX = viewport.w * (0.2 + Math.random() * 0.6);
+
+      const seg = 10;
+      const amp = 90;
+      const width = 42;
+
+      const pts = [];
+      for(let i=0; i<=seg; i++){
+        const t = i / seg;
+        const y = startY + (endY - startY) * t;
+        const offset = (i % 2 === 0 ? -amp : amp);
+        pts.push({ x: randomX + offset, y });
+      }
+
+      particles.push({
+        type: "lDraw",
+        pts,
+        progress: 0,
+        speed: 3.4,
+        width,
+        life: 1.0,
+        maxLife: 1.0
+      });
+    }
+
+    // =====================
+    // O : 중앙 파동 라인
+    // =====================
+    function startOWave(){
+      const life = 1.7;
+      const span = viewport.w * 0.55;
+      const xStart = (viewport.w - span)/2;
+      const xEnd = xStart + span;
+      const yMid = viewport.h * 0.5;
+      const amp  = Math.min(viewport.w, viewport.h) * 0.25;
+      const periods = Math.floor(Math.random() * 4) + 2;
+
+      particles.push({
+        type:"oWave",
+        life,
+        maxLife: life,
+        xStart,
+        xEnd,
+        yMid,
+        amp,
+        periods
+      });
+    }
+    // =====================
+// B : 작은 삼각형들이 원 둘레를 만드는 링
+// =====================
+function startBTriRing(){
+  const cx = viewport.w / 2;
+  const cy = viewport.h / 2;
+  const r  = Math.min(viewport.w, viewport.h) * 0.32;
+  const life = 3.0;
+
+  particles.push({
+    type: "bTriRing",
+    cx, cy,
+    r,
+    life,
+    maxLife: life,
+    startAngle: Math.random() * Math.PI * 2
+  });
+}
+
+
+    // =====================
+    // R / F / G / V 방향 토글
+    // =====================
+    let wipeDir = false;
+    let fDir = false;
+    let gDir = false;
+
+    // =====================
+    // R : 와이프
+    // =====================
+    function startWipe(){
+      const w = viewport.w * 0.85;
+      const h = viewport.h * 0.35;
+      particles.push({
+        type:"wipe",
+        x:(viewport.w - w)/2,
+        y:(viewport.h - h)/2,
+        w,h,
+        dir: wipeDir ? "ltr" : "rtl",
+        life:0.35,
+        maxLife:0.35
+      });
+      wipeDir = !wipeDir;
+    }
+
+    // =====================
+    // E : 3단 파동
+    // =====================
+    function makeWave(delay, scaleMul, speedMul, fadeEnd){
+      return {
+        type:"wave",
+        r: Math.min(viewport.w, viewport.h) * 0.30 * scaleMul,
+        life:(1.0/speedMul)*1.0,
+        maxLife:(1.0/speedMul)*1.0,
+        delay,
+        phase:Math.random()*Math.PI*2,
+        fadeEnd
+      };
+    }
+    function startPulse(){
+      particles.push(makeWave(0.00,1.00,1.5,0.70));
+      particles.push(makeWave(0.14,1.25,1.3,0.55));
+      particles.push(makeWave(0.30,1.75,0.8,0.00));
+    }
+
+    // =====================
+    // W : 모서리에서 눌리는 공
+    // =====================
+    function startBlob(){
+      const baseR = Math.max(viewport.w, viewport.h)*0.36;
+      const life = 1.2;
+      const seed = Math.random()*Math.PI*2;
+
+      const corner = Math.floor(Math.random()*4);
+      let x,y,vx,vy;
+      const speed = Math.max(viewport.w, viewport.h)*0.35;
+
+      if(corner===0){ x=-baseR*0.7;           y=-baseR*0.7;           vx=speed;  vy=speed;  }
+      if(corner===1){ x=viewport.w+baseR*0.7; y=-baseR*0.7;           vx=-speed; vy=speed;  }
+      if(corner===2){ x=viewport.w+baseR*0.7; y=viewport.h+baseR*0.7; vx=-speed; vy=-speed; }
+      if(corner===3){ x=-baseR*0.7;           y=viewport.h+baseR*0.7; vx=speed;  vy=-speed; }
+
+      particles.push({
+        type:"blob",
+        x,y,vx,vy,
+        r:baseR,
+        t:0,
+        life,
+        maxLife:life,
+        seed
+      });
+    }
+    // =====================
+// N : 빠르게 퍼지고 그대로 멈춰 사라지는 컬러 원 버스트
+// =====================
+function startNBurst(){
+  const cx = viewport.w / 2;
+  const cy = viewport.h / 2;
+
+  const life = 1.4; // 전체 유지 시간 (길게 유지)
+  const moveFrac = 0.15; // 빠르게 퍼지는 구간 → 0.15초 안에 퍼짐
+  const count = 22;
+
+  const minDim = Math.min(viewport.w, viewport.h);
+  const minDist = minDim * 0.25;
+  const maxDist = minDim * 0.75;
+
+  const colors = ["#c89a85", "#efb8c6", "#b7ced7", "#dddddd"];
+
+  const dots = [];
+
+  for(let i=0;i<count;i++){
+    const ang = Math.random() * Math.PI * 2;
+    const dist = minDist + Math.random() * (maxDist - minDist);
+
+    const tx = cx + Math.cos(ang) * dist;
+    const ty = cy + Math.sin(ang) * dist;
+
+    const rMin = 14;
+    const rMax = 30;
+    const radius = rMin + Math.random() * (rMax - rMin);
+
+    dots.push({
+      tx, ty, r: radius,
+      color: colors[(Math.random()*colors.length)|0]
+    });
+  }
+
+  particles.push({
+    type: "nBurst",
+    life,
+    maxLife: life,
+    cx,
+    cy,
+    dots,
+    moveFrac
+  });
+}
+
+
+    // =====================
+    // T : 샤방 링
+    // =====================
+    const RING_COLORS = [
+      "#c89a85",
+      "#efb8c6",
+      "#b7ced7",
+      "#dddddd"
+    ];
+    const pick = arr => arr[(Math.random()*arr.length)|0];
+
+    function sampleAroundCenter(){
+      const cx = viewport.w/2;
+      const cy = viewport.h/2;
+      const spread = Math.min(viewport.w, viewport.h) * 0.22;
+
+      let u1 = Math.random();
+      let u2 = Math.random();
+      let R = Math.sqrt(-2 * Math.log(u1));
+      let theta = 2 * Math.PI * u2;
+
+      let gx = R * Math.cos(theta);
+      let gy = R * Math.sin(theta);
+
+      return {
+        x: cx + gx * spread + (Math.random()-0.5)*30,
+        y: cy + gy * spread + (Math.random()-0.5)*30
+      };
+    }
+
+    function spawnRing(x,y){
+      particles.push({
+        type:"ring",
+        x,y,
+        baseR: 10 + Math.random()*30,
+        grow : 10 + Math.random()*30,
+        delay: Math.abs(
+          (Math.random()*0.25) + (Math.random()-0.5)*1.0
+        ),
+        life: 0.20 + Math.random()*0.25,
+        elapsed: 0,
+        color: pick(RING_COLORS)
+      });
+    }
+
+    function startRings(){
+      for(let i=0;i<12;i++){
+        let {x,y} = sampleAroundCenter();
+        let ok=false, tries=0;
+        while(!ok && tries<40){
+          ok=true;
+          for(const p of particles){
+            if(p.type!=="ring") continue;
+            const dx=x-p.x, dy=y-p.y;
+            if(Math.hypot(dx,dy) < 22){
+              ok=false;
+              const pos = sampleAroundCenter();
+              x=pos.x; y=pos.y;
+              break;
+            }
+          }
+          tries++;
+        }
+        spawnRing(x,y);
+      }
+    }
+
+    // =====================
+    // Y : 도넛
+    // =====================
+    function startYDonut(){
+      const cx = viewport.w / 2;
+      const cy = viewport.h / 2;
+
+      const outerR = Math.min(viewport.w, viewport.h) * 0.38;
+      const thickness = outerR * 0.28;
+      const innerR = outerR - thickness;
+
+      const life = 1.2;
+
+      particles.push({
+        type:"yDonut",
+        cx, cy,
+        outerR,
+        innerR,
+        life,
+        maxLife: life,
+        color: "#d7c493",
+        startAngle: Math.random() * Math.PI * 2
+      });
+    }
+
+    // =====================
+    // H : 작은 동그라미 링 (생성→유지→사라짐)
+    // =====================
+    function startHDotsRing(){
+      const cx = viewport.w / 2;
+      const cy = viewport.h / 2;
+      const r = Math.min(viewport.w, viewport.h) * 0.32;
+      const life = 3.0;
+
+      particles.push({
+        type: "hDotsRing",
+        cx, cy,
+        r,
+        life,
+        maxLife: life,
+        startAngle: Math.random() * Math.PI * 2
+      });
+    }
+
+    // =====================
+    // J : 중앙 다이아몬드 (작게 → 엄청 크게)
+    // =====================
+    function startJDiamond(){
+      const minDim = Math.min(viewport.w, viewport.h);
+      const life = 0.9;
+      particles.push({
+        type:"jDiamond",
+        life,
+        maxLife:life,
+        cx: viewport.w/2,
+        cy: viewport.h/2,
+        r0: minDim * 0.05,
+        r1: minDim * 0.75,
+        color:"#ffffff"
+      });
+    }
+
+    // =====================
+    // K : 삼각형 → 8각형 (면이 채워지는 도형)
+    // =====================
+    function startKPoly(){
+      const minDim = Math.min(viewport.w, viewport.h);
+      const life = 1.1;
+
+      particles.push({
+        type:"kPoly",
+        life,
+        maxLife:life,
+        cx: viewport.w/2,
+        cy: viewport.h/2,
+        r0: minDim*0.10,
+        r1: minDim*0.35,
+        minSides:3,
+        maxSides:8,
+        color:"#d7c493"
+      });
+    }
+
+    // =====================
+    // D : 랜덤 y → 중앙 근처 핑크 원
+    // =====================
+    function startDCircle(){
+      const x = viewport.w * (0.15 + 0.7 * Math.random());
+
+      const fromTop = Math.random() < 0.5;
+      const topY    = viewport.h * 0.18;
+      const bottomY = viewport.h * 0.82;
+      const yStart  = fromTop ? topY : bottomY;
+
+      const centerY = viewport.h * 0.5;
+      const yEnd    = centerY + (Math.random() - 0.5) * viewport.h * 0.10;
+
+      const life = 1.0;
+
+      particles.push({
+        type: "dCircle",
+        x,
+        yStart,
+        yEnd,
+        rStart: Math.min(viewport.w, viewport.h) * 0.24,
+        rEnd:   0,
+        moveFrac: 0.85,
+        life,
+        maxLife: life
+      });
+    }
+
+
+    // =====================
+    // X : 좌우 번갈아 슬라이드 커버
+    // =====================
+    let xFromLeft = true;
+    function startXCover(){
+      const life = 0.9;
+      particles.push({
+        type:"xCover",
+        life,
+        maxLife: life,
+        fromLeft: xFromLeft
+      });
+      xFromLeft = !xFromLeft;
+    }
+
+    // =====================
+    // F : 얇은 직사각형 4개 WIPE
+    // =====================
+    function startFBars(){
+      const w = viewport.w * 0.85;
+      const totalH = viewport.h * 0.35;
+      const barCount = 4;
+
+      const barHeight = totalH * 0.16;
+      const gap = (totalH - barHeight * barCount) / (barCount - 1);
+
+      const bars = [];
+      let y0 = (viewport.h - totalH) / 2;
+
+      for(let i=0;i<barCount;i++){
+        bars.push({
+          y: y0 + i * (barHeight + gap),
+          h: barHeight
+        });
+      }
+
+      particles.push({
+        type:"fBars",
+        x:(viewport.w - w)/2,
+        w,
+        bars,
+        dir: fDir ? "ltr" : "rtl",
+        life:0.35,
+        maxLife:0.35
+      });
+      fDir = !fDir;
+    }
+
+    // =====================
+    // V : 세로 더 짧고 7줄인 직사각형 WIPE
+    // =====================
+    function startVBars(){
+      const w = viewport.w * 0.85;
+      const totalH = viewport.h * 0.38;
+      const barCount = 7;
+
+      const barHeight = totalH * 0.08; // f보다 더 얇게
+      const gap = (totalH - barHeight * barCount) / (barCount - 1);
+
+      const bars = [];
+      let y0 = (viewport.h - totalH) / 2;
+
+      for(let i=0;i<barCount;i++){
+        bars.push({
+          y: y0 + i * (barHeight + gap),
+          h: barHeight
+        });
+      }
+
+      particles.push({
+        type:"vBars",
+        x:(viewport.w - w)/2,
+        w,
+        bars,
+        dir: fDir ? "ltr" : "rtl",  // f와 같은 방향 토글 사용
+        life:0.35,
+        maxLife:0.35
+      });
+      fDir = !fDir;
+    }
+
+    // =====================
+    // G : 대각선 직선 (／ ↔ ＼)
+    // =====================
+    function startGLine(){
+      const life = 0.55;
+      const cx = viewport.w / 2;
+      const cy = viewport.h / 2;
+
+      const angle = gDir ? (3*Math.PI/4) : (Math.PI/4);
+      const maxLen = Math.hypot(viewport.w, viewport.h) * 1.2;
+
+      particles.push({
+        type:"gLine",
+        life,
+        maxLife:life,
+        cx, cy,
+        angle,
+        maxLen
+      });
+
+      gDir = !gDir;
+    }
+
+    // =====================
+    // C : 주황색 원 → 반으로 갈라지며 사라짐
+    // =====================
+    function startCSplitCircle(){
+      const cx = viewport.w / 2;
+      const cy = viewport.h / 2;
+      const maxR = Math.min(viewport.w, viewport.h) * 0.22;
+
+      particles.push({
+        type: "cSplit",
+        cx,
+        cy,
+        maxR,
+        life: 1.2,
+        maxLife: 1.2
+      });
+    }
+
+    // =====================
+    // P : 바깥에서 시작해 안으로 말려 들어가는 스파이럴
+    // =====================
+    function startPSpiral(){
+      const cx = viewport.w / 2;
+      const cy = viewport.h / 2;
+      const life = 3.5;
+      const minDim = Math.min(viewport.w, viewport.h);
+
+      particles.push({
+        type: "pSpiral",
+        life,
+        maxLife: life,
+        cx,
+        cy,
+        maxRadius: minDim * 0.45,
+        minRadius: minDim * 0.06,
+        turns: 2.5,
+        rotSpeed: Math.PI * 1.0
+      });
+    }
+
+    // =====================
+    // DRAW LOOP
+    // =====================
+    function draw(){
+      ctx.clearRect(0,0,viewport.w,viewport.h);
+      const dt = 1/60;
+
+      for(let i=particles.length-1;i>=0;i--){
+        const p = particles[i];
+
+        // ---- T : ring ----
+        if(p.type==="ring"){
+          if(p.delay>0){
+            p.delay -= dt;
+            continue;
+          }
+
+          p.elapsed += dt;
+          if(p.elapsed >= p.life){
+            particles.splice(i,1);
+            continue;
+          }
+
+          const t = p.elapsed / p.life;
+          const outerR = p.baseR + p.grow * t;
+          let innerR = 0;
+
+          if(t <= 0.3){
+            innerR = 0;
+          } else {
+            const innerNorm = Math.min(1,(t-0.3)/0.7);
+            innerR = outerR * innerNorm * 0.98;
+          }
+
+          ctx.save();
+          ctx.fillStyle = p.color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, outerR, 0, Math.PI*2, false);
+          if(innerR > 0){
+            ctx.arc(p.x, p.y, innerR, 0, Math.PI*2, true);
+          }
+          ctx.fill();
+          ctx.restore();
+          continue;
+        }
+
+        // 공통 life 감소
+        p.life -= dt;
+        if(p.life <= 0){
+          particles.splice(i,1);
+          continue;
+        }
+
+        // ---- FLASH ----
+        if(p.type==="flash"){
+          const t = 1 - (p.life / p.maxLife);
+          let alpha = 0;
+
+          if(t < 0.3){
+            const u = t / 0.3;
+            alpha = 1 - (u - 0.5)**2*4;
+          } else if(t < 0.6){
+            alpha = 0;
+          } else if(t < 0.9){
+            const u = (t - 0.6) / 0.3;
+            alpha = (1 - (u - 0.5)**2*4) * 0.8;
+          } else {
+            alpha = 0;
+          }
+
+          alpha = Math.max(0, Math.min(1, alpha));
+          const {r,g,b} = p.color || {r:255,g:255,b:255};
+
+          ctx.save();
+          ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
+          ctx.fillRect(0,0,viewport.w,viewport.h);
+          ctx.restore();
+        }
+        // ---- N : 빠르게 퍼져서 멈추는 버스트 ----
+else if (p.type === "nBurst") {
+  const tNorm = 1 - (p.life / p.maxLife);
+
+  const moveFrac = p.moveFrac; // 매우 짧음 = 매우 빠르게 퍼짐
+
+  for(const d of p.dots){
+    let x, y;
+
+    if(tNorm < moveFrac){
+      const u = tNorm / moveFrac;  // 0~1이 매우 빠르게 도달
+      x = p.cx + (d.tx - p.cx) * u;
+      y = p.cy + (d.ty - p.cy) * u;
+    } else {
+      x = d.tx;
+      y = d.ty;
+    }
+
+    ctx.beginPath();
+    ctx.arc(x, y, d.r, 0, Math.PI*2);
+    ctx.fillStyle = d.color;  // 투명도 없음
+    ctx.fill();
+  }
+}
+
+    
+
+        // ---- S : cover ----
+        else if(p.type === "cover"){
+          const t = 1 - (p.life / p.maxLife);
+          const moveFrac = 0.25;
+          const holdFrac = 0.60;
+          const vw = viewport.w;
+          const vh = viewport.h;
+          let y = 0;
+
+          if(p.from === "top"){
+            if(t < moveFrac){
+              const u = t / moveFrac;
+              y = -vh + vh*u;
+            } else if(t < moveFrac + holdFrac){
+              y = 0;
+            } else {
+              const u = (t - moveFrac - holdFrac) / (1 - moveFrac - holdFrac);
+              y = 0 + vh*u;
+            }
+          } else {
+            if(t < moveFrac){
+              const u = t / moveFrac;
+              y = vh - vh*u;
+            } else if(t < moveFrac + holdFrac){
+              y = 0;
+            } else {
+              const u = (t - moveFrac - holdFrac) / (1 - moveFrac - holdFrac);
+              y = 0 - vh*u;
+            }
+          }
+
+          ctx.save();
+          ctx.globalCompositeOperation = "destination-over";
+          ctx.fillStyle = p.color || "#c89a85";
+          ctx.fillRect(0, y, vw, vh);
+          ctx.restore();
+        }
+
+        // ---- U : 흩뿌려지는 원들 ----
+        else if (p.type === "uBurst"){
+          const tNorm = 1 - (p.life / p.maxLife);
+          const moveFrac = p.moveFrac || 0.25;
+
+          ctx.save();
+          ctx.fillStyle = "#ffffff";
+          ctx.beginPath();
+          ctx.arc(p.cx, p.cy, p.baseR, 0, Math.PI*2);
+          ctx.fill();
+          ctx.restore();
+
+          for(const d of p.dots){
+            let x, y;
+
+            if(tNorm < moveFrac){
+              const u = tNorm / moveFrac;
+              x = p.cx + (d.tx - p.cx) * u;
+              y = p.cy + (d.ty - p.cy) * u;
+            } else {
+              x = d.tx;
+              y = d.ty;
+            }
+
+            ctx.beginPath();
+            ctx.arc(x, y, d.r, 0, Math.PI*2);
+            ctx.fillStyle = "#ffffff";
+            ctx.fill();
+          }
+        }
+
+        // ---- I : 회전하는 정삼각형 ----
+        else if (p.type === "tri"){
+          const tNorm = 1 - (p.life / p.maxLife);
+          const scale = 0.4 + tNorm * 4.0;
+          const side = p.baseSize * scale;
+
+          const cx = p.cx;
+          const cy = p.cy;
+
+          const h = side * Math.sqrt(3) / 2;
+          const pts = [
+            { x: 0,        y: -2*h/3 },
+            { x: -side/2,  y:  h/3   },
+            { x:  side/2,  y:  h/3   }
+          ];
+
+          const cosA = Math.cos(p.rot);
+          const sinA = Math.sin(p.rot);
+
+          const world = pts.map(pt => {
+            const rx = pt.x * cosA - pt.y * sinA;
+            const ry = pt.x * sinA + pt.y * cosA;
+            return { x: cx + rx, y: cy + ry };
+          });
+
+          const [p1,p2,p3] = world;
+
+          ctx.save();
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = "#c0c3c8";
+
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.lineTo(p3.x, p3.y);
+          ctx.closePath();
+          ctx.stroke();
+
+          ctx.fillStyle = "#ffffff";
+          const rCorner = 10;
+          ctx.beginPath(); ctx.arc(p1.x,p1.y,rCorner,0,Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.arc(p2.x,p2.y,rCorner,0,Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.arc(p3.x,p3.y,rCorner,0,Math.PI*2); ctx.fill();
+
+          ctx.restore();
+        }
+        // ---- H : 작은 동그라미 링 ----
+else if (p.type === "hDotsRing") {
+  const elapsed = p.maxLife - p.life;
+  const norm = Math.min(1, Math.max(0, elapsed / p.maxLife));
+
+  const createFrac = 0.25;
+  const eraseFrac  = 0.35;
+
+  let arcProgress;
+  let alpha;
+
+  if (norm < createFrac) {
+    const u = norm / createFrac;
+    arcProgress = u;
+    alpha = u;
+  } else if (norm < 1 - eraseFrac) {
+    arcProgress = 1;
+    alpha = 1;
+  } else {
+    const u = (norm - (1 - eraseFrac)) / eraseFrac;
+    arcProgress = 1 - u;
+    alpha = 1 - u;
+  }
+
+  arcProgress = Math.max(0, Math.min(1, arcProgress));
+  alpha = Math.max(0, Math.min(1, alpha));
+
+  const dotCount = 12;
+  const dotR = Math.min(viewport.w, viewport.h) * 0.02;
+  const spin = norm * Math.PI * 4;
+
+  ctx.save();
+  for (let j = 0; j < dotCount; j++) {
+    const tDot = dotCount === 1 ? 0 : (j / dotCount);
+    const local = tDot * arcProgress;
+    const ang = p.startAngle + spin + local * Math.PI * 2;
+
+    const x = p.cx + p.r * Math.cos(ang);
+    const y = p.cy + p.r * Math.sin(ang);
+
+    ctx.beginPath();
+    ctx.arc(x, y, dotR, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,94,58,${alpha})`;
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ---- M : 회전하는 정육각형 (I랑 같은 스타일) ----
+else if (p.type === "mHex"){
+  const tNorm = 1 - (p.life / p.maxLife);
+  const scale = 0.3 + tNorm * 2.5;          // I와 같은 성장 느낌
+  const r = p.baseSize * scale;
+
+  const cx = p.cx;
+  const cy = p.cy;
+
+  // 정육각형 꼭짓점들
+  const pts = [];
+  for (let n = 0; n < 6; n++){
+    const ang = p.rot + (n / 6) * Math.PI * 2;
+    const x = cx + Math.cos(ang) * r;
+    const y = cy + Math.sin(ang) * r;
+    pts.push({ x, y });
+  }
+
+  ctx.save();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "#c0c3c8";
+
+  // 육각형 외곽선
+  ctx.beginPath();
+  pts.forEach((pt, idx)=>{
+    if(idx === 0) ctx.moveTo(pt.x, pt.y);
+    else          ctx.lineTo(pt.x, pt.y);
+  });
+  ctx.closePath();
+  ctx.stroke();
+  // 꼭짓점에 동그라미 (I와 동일)
+  ctx.fillStyle = "#ffffff";
+  const rCorner = 10;
+  for (const pt of pts){
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, rCorner, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+
+ 
+// ---- B : 작은 "정삼각형" 들이 원 둘레를 만드는 링 ----
+else if (p.type === "bTriRing") {
+  const elapsed = p.maxLife - p.life;
+  const norm = Math.min(1, Math.max(0, elapsed / p.maxLife));
+
+  const createFrac = 0.25;
+  const eraseFrac  = 0.35;
+
+  let alpha;
+  if (norm < createFrac) {
+    const u = norm / createFrac;   // 0→1
+    alpha = u;                     // 서서히 나타남
+  } else if (norm < 1 - eraseFrac) {
+    alpha = 1;                     // 유지
+  } else {
+    const u = (norm - (1 - eraseFrac)) / eraseFrac; // 0→1
+    alpha = 1 - u;                 // 서서히 사라짐
+  }
+
+  alpha = Math.max(0, Math.min(1, alpha));
+
+  const triCount = 10;  // 갯수 (간격 넉넉하게)
+  const side     = Math.min(viewport.w, viewport.h) * 0.025;  // 정삼각형 한 변 길이(작게)
+  const height   = side * Math.sqrt(3) / 2;                   // 정삼각형 높이
+  const spin     = norm * Math.PI * 4;                        // 살짝 회전
+
+  ctx.save();
+  ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+
+  for (let j = 0; j < triCount; j++) {
+    // 원 둘레에 균등 배치
+    const tTri = triCount === 1 ? 0 : (j / triCount);
+    const ang  = p.startAngle + spin + tTri * Math.PI * 2;
+
+    // 원 중심에서 삼각형 “중심점” 위치
+    const nx = Math.cos(ang);  // 바깥 방향(법선)
+    const ny = Math.sin(ang);
+    const tx = -ny;            // 접선 방향
+    const ty = nx;
+
+    const cxTri = p.cx + p.r * nx;
+    const cyTri = p.cy + p.r * ny;
+
+    // 정삼각형을 로컬 좌표로 정의:
+    //   위 꼭짓점: (0,  height/2)
+    //   아래 두 꼭짓점: (-side/2, -height/2), (side/2, -height/2)
+    const localVerts = [
+      { x: 0,         y:  height / 2 },
+      { x: -side / 2, y: -height / 2 },
+      { x:  side / 2, y: -height / 2 }
+    ];
+
+    ctx.beginPath();
+    localVerts.forEach((v, idx) => {
+      // 로컬 (x, y)를 접선/법선 방향으로 회전·이동
+      const worldX = cxTri + tx * v.x + nx * v.y;
+      const worldY = cyTri + ty * v.x + ny * v.y;
+      if (idx === 0) ctx.moveTo(worldX, worldY);
+      else           ctx.lineTo(worldX, worldY);
+    });
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+
+        // ---- L : 지그재그 그려지는 애니메이션 ----
+        else if (p.type === "lDraw") {
+          p.progress += dt * p.speed;
+          const prog = Math.min(1, p.progress);
+          const count = Math.floor(p.pts.length * prog);
+
+          ctx.save();
+          ctx.lineCap = "round";
+          ctx.lineJoin = "round";
+
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = p.width;
+
+          ctx.beginPath();
+          ctx.moveTo(p.pts[0].x, p.pts[0].y);
+
+          for (let i = 1; i < count; i++){
+            ctx.lineTo(p.pts[i].x, p.pts[i].y);
+          }
+
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // ---- C : 좌우로 갈라지며 멀어지는 주황색 원 ----
+        else if (p.type === "cSplit") {
+          const t = 1 - (p.life / p.maxLife);
+
+          const cx = p.cx;
+          const cy = p.cy;
+          const maxR = p.maxR;
+
+          let r = maxR;
+          let alpha = 1;
+          let offX = 0;
+
+          if (t < 0.25) {
+            const u = t / 0.25;
+            alpha = u;
+          } else {
+            const u = (t - 0.25) / 0.75;
+            r = maxR;
+            offX = u * maxR * 2.2;
+            alpha = 1 - u;
+          }
+
+          ctx.save();
+          ctx.fillStyle = `rgba(255,94,58,${alpha})`;
+
+          ctx.beginPath();
+          ctx.arc(cx - offX, cy, r, Math.PI/2, Math.PI*3/2, true);
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(cx + offX, cy, r, Math.PI*3/2, Math.PI/2, true);
+          ctx.fill();
+
+          ctx.restore();
+        }
+
+        // ---- O : 파동 라인 ----
+        else if (p.type === "oWave"){
+          const tNorm = 1 - (p.life / p.maxLife);
+          const drawFrac = 0.5;
+          const xStart = p.xStart;
+          const xEnd   = p.xEnd;
+          const span   = xEnd - xStart;
+          const yMid   = p.yMid;
+          const amp    = p.amp;
+          const periods = p.periods;
+
+          let visibleStart = xStart;
+          let visibleEnd   = xEnd;
+
+          if(tNorm <= drawFrac){
+            const u = tNorm / drawFrac;
+            visibleEnd = xStart + span * u;
+          } else {
+            const u = (tNorm - drawFrac) / (1 - drawFrac);
+            const remain = 1 - u;
+            visibleEnd = xStart + span * remain;
+          }
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(visibleStart, 0, visibleEnd - visibleStart, viewport.h);
+          ctx.clip();
+
+          ctx.beginPath();
+          const steps = 220;
+          for(let s=0; s<=steps; s++){
+            const tt = s / steps;
+            const x = xStart + span * tt;
+            const phase = tt * periods * Math.PI * 2;
+            const y = yMid + Math.sin(phase) * amp;
+            if(s===0) ctx.moveTo(x,y);
+            else ctx.lineTo(x,y);
+          }
+
+          ctx.lineWidth = 18;
+          ctx.lineCap = "round";
+          ctx.strokeStyle = "#FFC4DA";
+          ctx.stroke();
+
+          ctx.restore();
+        }
+
+        // ---- R : WIPE ----
+        else if(p.type==="wipe"){
+          const prog = 1 - (p.life/p.maxLife);
+          const remainW = Math.max(0, p.w*(1-prog));
+          ctx.fillStyle = "#ffffff";
+          if(p.dir==="rtl") ctx.fillRect(p.x, p.y, remainW, p.h);
+          else ctx.fillRect(p.x+(p.w-remainW), p.y, remainW, p.h);
+        }
+
+        // ---- F : 얇은 직사각형 4개 WIPE ----
+        else if(p.type==="fBars"){
+          const prog = 1 - (p.life/p.maxLife);
+          const remainW = Math.max(0, p.w*(1-prog));
+          ctx.fillStyle = "#ffffff";
+
+          const xBase = (p.dir==="rtl")
+            ? p.x
+            : p.x + (p.w - remainW);
+
+          for(const b of p.bars){
+            ctx.fillRect(xBase, b.y, remainW, b.h);
+          }
+        }
+
+        // ---- V : 7줄 직사각형 WIPE ----
+        else if(p.type==="vBars"){
+          const prog = 1 - (p.life/p.maxLife);
+          const remainW = Math.max(0, p.w*(1-prog));
+          ctx.fillStyle = "#ffffff";
+
+          const xBase = (p.dir==="rtl")
+            ? p.x
+            : p.x + (p.w - remainW);
+
+          for(const b of p.bars){
+            ctx.fillRect(xBase, b.y, remainW, b.h);
+          }
+        }
+
+        // ---- E : WAVES ----
+        else if(p.type==="wave"){
+          if(p.delay>0){ p.delay-=dt; continue; }
+          const cx = viewport.w/2;
+          const cy = viewport.h/2;
+          const t = 1 - (p.life/p.maxLife);
+          const scale = 1 + Math.sin(t*6 + p.phase)*0.11;
+          const alpha = (1-t) * (0.9 - p.fadeEnd * t);
+          ctx.beginPath();
+          ctx.arc(cx, cy, p.r*scale, 0, Math.PI*2);
+          ctx.fillStyle=`rgba(255,94,58,${alpha})`;
+          ctx.fill();
+        }
+
+        // ---- W : BLOB ----
+        else if(p.type==="blob"){
+          p.t += dt;
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+
+          const age = 1 - (p.life/p.maxLife);
+          const jiggle = Math.sin(p.t*2.4)*0.025*(1-age*0.7);
+          const baseScale = 1 + jiggle;
+          const deformAmp = 0.04 + 0.08*age;
+          const k2 = 2.0, spin = 0.9;
+          const steps = 160;
+
+          ctx.beginPath();
+          for(let s=0; s<=steps; s++){
+            const a = (s/steps)*Math.PI*2;
+            const d = 0.5*(1 + Math.cos(k2*a + p.seed + p.t*spin));
+            const rr = p.r * baseScale * (1 - deformAmp * d);
+            const X = p.x + rr * Math.cos(a);
+            const Y = p.y + rr * Math.sin(a);
+            if(s===0) ctx.moveTo(X,Y); else ctx.lineTo(X,Y);
+          }
+          ctx.closePath();
+          ctx.fillStyle="rgba(235,235,235,0.95)";
+          ctx.shadowColor="rgba(0,0,0,0.28)";
+          ctx.shadowBlur=20;
+          ctx.fill();
+          ctx.shadowBlur=0;
+        }
+
+        // ---- Y : 도넛 ----
+        else if(p.type === "yDonut"){
+          const elapsed = p.maxLife - p.life;
+          const norm = Math.min(1, Math.max(0, elapsed / p.maxLife));
+          const createFrac = 0.25;
+
+          let arcProgress;
+          let alpha;
+
+          if(norm < createFrac){
+            const u = norm / createFrac;
+            arcProgress = 1 - (1-u)*(1-u);
+            alpha = 1;
+          } else {
+            arcProgress = 1;
+            const u = (norm - createFrac) / (1 - createFrac);
+            alpha = 1 - u*u;
+          }
+
+          const start = p.startAngle;
+          const end   = start + Math.PI * 2 * arcProgress;
+
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = p.color;
+          ctx.beginPath();
+          ctx.arc(p.cx, p.cy, p.outerR, start, end, false);
+          ctx.arc(p.cx, p.cy, p.innerR, end, start, true);
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+        }
+
+        // ---- H : 작은 동그라미 링 ----
+        else if (p.type === "hDotsRing") {
+          const elapsed = p.maxLife - p.life;
+          const norm = Math.min(1, Math.max(0, elapsed / p.maxLife));
+
+          const createFrac = 0.25;
+          const eraseFrac  = 0.35;
+
+          let arcProgress;
+          let alpha;
+
+          if (norm < createFrac) {
+            const u = norm / createFrac;
+            arcProgress = u;
+            alpha = u;
+          } else if (norm < 1 - eraseFrac) {
+            arcProgress = 1;
+            alpha = 1;
+          } else {
+            const u = (norm - (1 - eraseFrac)) / eraseFrac;
+            arcProgress = 1 - u;
+            alpha = 1 - u;
+          }
+
+          arcProgress = Math.max(0, Math.min(1, arcProgress));
+          alpha = Math.max(0, Math.min(1, alpha));
+
+          const dotCount = 12;
+          const dotR = Math.min(viewport.w, viewport.h) * 0.02;
+          const spin = norm * Math.PI * 4;
+
+          ctx.save();
+          for (let j = 0; j < dotCount; j++) {
+            const tDot = dotCount === 1 ? 0 : (j / dotCount);
+            const local = tDot * arcProgress;
+            const ang = p.startAngle + spin + local * Math.PI * 2;
+
+            const x = p.cx + p.r * Math.cos(ang);
+            const y = p.cy + p.r * Math.sin(ang);
+
+            ctx.beginPath();
+            ctx.arc(x, y, dotR, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255,94,58,${alpha})`;
+            ctx.fill();
+          }
+          ctx.restore();
+        }
+
+        // ---- J : 중앙 다이아몬드 ----
+        else if (p.type === "jDiamond") {
+          const t = 1 - (p.life / p.maxLife);
+          const ease = t*t*(3 - 2*t);
+          const r = p.r0 + (p.r1 - p.r0)*ease;
+
+          const cx = p.cx;
+          const cy = p.cy;
+
+          const pts = [
+            { x: 0,  y: -r },
+            { x: r,  y: 0  },
+            { x: 0,  y: r  },
+            { x: -r, y: 0  }
+          ];
+
+          const alpha = 1 - t;
+
+          ctx.save();
+          ctx.beginPath();
+          pts.forEach((pt, idx)=>{
+            const X = cx + pt.x;
+            const Y = cy + pt.y;
+            if(idx===0) ctx.moveTo(X,Y);
+            else ctx.lineTo(X,Y);
+          });
+          ctx.closePath();
+
+          ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+          ctx.fill();
+
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // ---- K : 삼각형 → 8각형 (채워진 도형) ----
+        else if (p.type === "kPoly") {
+          const t = 1 - (p.life / p.maxLife);
+          const ease = t*t*(3 - 2*t);
+
+          const sides = p.minSides + (p.maxSides - p.minSides)*ease;
+          const intSides = Math.floor(sides);
+          const r = p.r0 + (p.r1 - p.r0)*ease;
+
+          const cx = p.cx;
+          const cy = p.cy;
+
+          ctx.save();
+          ctx.beginPath();
+          for(let n=0;n<intSides;n++){
+            const ang = (n / intSides)*Math.PI*2 - Math.PI/2;
+            const x = cx + Math.cos(ang)*r;
+            const y = cy + Math.sin(ang)*r;
+            if(n===0) ctx.moveTo(x,y);
+            else ctx.lineTo(x,y);
+          }
+          ctx.closePath();
+
+          ctx.fillStyle = p.color;
+          ctx.fill();
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = p.color;
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // ---- D : 핑크 원 ----
+        else if (p.type === "dCircle") {
+          const t = 1 - (p.life / p.maxLife);
+          const moveFrac = p.moveFrac;
+
+          let y, r;
+
+          if (t < moveFrac) {
+            const u = t / moveFrac;
+            y = p.yStart + (p.yEnd - p.yStart) * u;
+            r = p.rStart;
+          } else {
+            const u = (t - moveFrac) / (1 - moveFrac);
+            y = p.yEnd;
+            r = p.rStart + (p.rEnd - p.rStart) * u;
+          }
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(p.x, y, Math.max(0, r), 0, Math.PI * 2);
+          ctx.fillStyle = "#FFC4DA";
+          ctx.fill();
+          ctx.restore();
+        }
+
+        // ---- X : 슬라이드 커버 ----
+        else if (p.type === "xCover") {
+          const t = 1 - (p.life / p.maxLife);
+          const vw = viewport.w;
+          const vh = viewport.h;
+
+          const enterFrac = 0.75;
+          let x;
+
+          if (t < enterFrac) {
+            const u = t / enterFrac;
+            if (p.fromLeft) {
+              x = -vw + vw * u;
+            } else {
+              x = vw - vw * u;
+            }
+          } else {
+            const u = (t - enterFrac) / (1 - enterFrac);
+            if (p.fromLeft) {
+              x = 0 - vw * 1.1 * u;
+            } else {
+              x = 0 + vw * 1.1 * u;
+            }
+          }
+
+          ctx.save();
+          ctx.fillStyle = "#b7ced7";
+          ctx.fillRect(x, 0, vw, vh);
+          ctx.restore();
+        }
+
+        // ---- G : 대각선 직선 ----
+        else if (p.type === "gLine") {
+          const t = 1 - (p.life / p.maxLife);
+          const u = 1 - (1 - t) * (1 - t);
+          const len = p.maxLen * u;
+          const half = len / 2;
+
+          const dx = Math.cos(p.angle);
+          const dy = Math.sin(p.angle);
+
+          const x1 = p.cx - dx * half;
+          const y1 = p.cy - dy * half;
+          const x2 = p.cx + dx * half;
+          const y2 = p.cy + dy * half;
+
+          const alpha = 1 - t;
+
+          ctx.save();
+          ctx.lineWidth = 10;
+          ctx.lineCap = "round";
+          ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // ---- P : 스파이럴 ----
+        else if (p.type === "pSpiral") {
+          const t = 1 - (p.life / p.maxLife);
+          const head = Math.min(1, t * 1.1);
+          const globalRot = t * p.rotSpeed;
+
+          const globalFade = (t < 0.85) ? 1 : Math.max(0, 1 - (t - 0.85) / 0.15);
+
+          const cx = p.cx;
+          const cy = p.cy;
+          const R0 = p.maxRadius;
+          const R1 = p.minRadius;
+          const turns = p.turns;
+
+          const totalSteps = 420;
+          const stepsToDraw = Math.max(2, Math.floor(totalSteps * head));
+
+          ctx.save();
+          ctx.lineWidth = 3;
+          ctx.setLineDash([8, 10]);
+          ctx.lineCap = "round";
+
+          ctx.beginPath();
+          for (let s = 0; s <= stepsToDraw; s++) {
+            const u2 = s / (totalSteps - 1);
+
+            let baseR = R0 + (R1 - R0) * u2;
+            const outwardFactor = 1 - u2;
+            const timeFactor    = t;
+            const strongExpand  = 1 + 1.0 * outwardFactor * timeFactor;
+            const r = baseR * strongExpand;
+
+            const angle = u2 * turns * Math.PI * 2 + globalRot;
+
+            const x = cx + r * Math.cos(angle);
+            const y = cy + r * Math.sin(angle);
+
+            if (s === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+
+          const innerFadeFactor = 1 - Math.max(0, (t * 1.1 - 0.6));
+          const innerFadeClamped = Math.max(0, Math.min(1, innerFadeFactor));
+          const alpha = globalFade * innerFadeClamped;
+
+          ctx.strokeStyle = `rgba(210,213,220,${alpha})`;
+          ctx.stroke();
+
+          ctx.setLineDash([]);
+          ctx.restore();
+        }
+      }
+
+      requestAnimationFrame(draw);
+    }
+    requestAnimationFrame(draw);
+
+    // =====================
+    // 키 입력
+    // =====================
+    const lastKeyEl = document.getElementById("lastKey");
+
+    window.addEventListener("keydown", e=>{
+      if(e.repeat) return;
+
+      let k = null;
+      switch(e.code){
+        case "KeyQ": k="q"; break;
+        case "KeyA": k="a"; break;
+        case "KeyS": k="s"; break;
+        case "KeyU": k="u"; break;
+        case "KeyI": k="i"; break;
+        case "KeyO": k="o"; break;
+        case "KeyR": k="r"; break;
+        case "KeyE": k="e"; break;
+        case "KeyW": k="w"; break;
+        case "KeyT": k="t"; break;
+        case "KeyY": k="y"; break;
+        case "KeyP": k="p"; break;
+        case "KeyD": k="d"; break;
+        case "KeyX": k="x"; break;
+        case "KeyF": k="f"; break;
+        case "KeyG": k="g"; break;
+        case "KeyH": k="h"; break;
+        case "KeyJ": k="j"; break;
+        case "KeyK": k="k"; break;
+        case "KeyL": k="l"; break;
+        case "KeyZ": k="z"; break;
+        case "KeyC": k="c"; break;
+        case "KeyV": k="v"; break;
+          case "KeyB": k="b"; break;
+          case "KeyN": k="n"; break; 
+          case "KeyM": k="m"; break;
+        default: return;
+      }
+
+      lastKeyEl.textContent = k.toUpperCase();
+
+      if(k==="q")      startFlash({r:255,g:255,b:255});
+      else if(k==="a") startFlash({r:183,g:206,b:215});
+      else if(k==="s") startCoverSwipe();
+      else if(k==="u") startUBurst();
+      else if(k==="i") startITriangle();
+      else if(k==="o") startOWave();
+      else if(k==="r") startWipe();
+      else if(k==="e") startPulse();
+      else if(k==="w") startBlob();
+      else if(k==="t") startRings();
+      else if(k==="y") startYDonut();
+      else if(k==="h") startHDotsRing();
+      else if(k==="j") startJDiamond();
+      else if(k==="k") startKPoly();
+      else if(k==="p") startPSpiral();
+      else if(k==="d") startDCircle();
+      else if(k==="x") startXCover();
+      else if(k==="f") startFBars();
+      else if(k==="g") startGLine();
+      else if(k==="l") startLZig();
+      else if(k==="z") startFlash({ r:255, g:196, b:218 });
+      else if(k==="c") startCSplitCircle();
+      else if(k==="v") startVBars();
+      else if(k==="b") startBTriRing();
+      else if(k==="n") startNBurst();
+      else if(k==="m") startMHex();
+
+
+      playSoundForKey(k);
+    });
+
+    preloadSounds();
+  </script>
+</body>
+</html>
